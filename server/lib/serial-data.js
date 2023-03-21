@@ -14,7 +14,7 @@ module.exports = {
       return rawData
     }
 
-    var parseData = function (toParse) {
+    var parseData = function (allowed = []) {
       data = rawData.split(",")
 
       result = {}
@@ -33,8 +33,8 @@ module.exports = {
       getRawData: function() {
         return getRawData()
       },
-      parseData: function() {
-        return parseData()
+      parseData: function(allowed = []) {
+        return parseData(allowed)
       }
     }
   })()
