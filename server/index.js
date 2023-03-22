@@ -9,6 +9,7 @@ const helmet = require("helmet");
 const morgan = require("morgan");
 const path = require("path");
 const mqtt = require("mqtt");
+const NodeWebCam = require('node-webcam')
 
 const app = express();
 const http = require("http");
@@ -181,18 +182,24 @@ const postToApi = async () => {
   console.log("status public");
   console.log(response);
 
-  await fetch(`${BACKEND_URL}/telemetry`, {
-    method: "POST",
-    body: JSON.stringify(postData),
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    },
+  NodeWebCam.capture('telemetry', { callbackReturn: "base64" }, async function (err, data) {
+    if (err) return console.error(err);
+
+    postData = {...postData, camera: data}
+  
+    await fetch(`${BACKEND_URL}/telemetry`, {
+      method: "POST",
+      body: JSON.stringify(postData),
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+    })
+      .then((res) => res.json())
+      .then((res) => {
+        console.log(res);
+      });
   })
-    .then((res) => res.json())
-    .then((res) => {
-      console.log(res);
-    });
 };
 
 let timeBasedInterval;
