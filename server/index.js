@@ -212,7 +212,7 @@ client.on("connect", () => {
 
     await fetchSetting();
 
-    await SerialPortSocket.setSelectedPort("/dev/ttyUSB0");
+    await SerialPortSocket.setSelectedPort(process.env.PORT);
 
     if (SerialPortSocket.getSelectedPort() == "") return;
 
