@@ -36,7 +36,7 @@ const BACKEND_URL = process.env.BACKEND_URL;
 let postData = {};
 let currentStatusTma = 4;
 let settings = {};
-let isOnline = 0;
+let tmaChange = false;
 
 const checkConnection = () => {
   require("dns").resolve("www.google.com", function (err) {
@@ -77,8 +77,7 @@ const client = mqtt.connect(mqttConnectUrl, MQTT_OPTIONS);
 const write = async () => {
   let telemetry = await SerialPortSocket.write("REQ,*");
 
-  console.log("telemetry");
-  console.log(telemetry);
+  console.log("Data Telemetri Diambil");
 
   let RainBucket = new Date();
   let temperature = parseFloat(telemetry.temp);
@@ -148,6 +147,8 @@ const write = async () => {
     }
   };
 
+  tmaChange = currentStatusTma === statusTMA()
+
   currentStatusTma = statusTMA();
 
   postData = {
@@ -175,18 +176,13 @@ const write = async () => {
 const postToApi = async () => {
   checkConnection()
 
-  let command = `${postData.tma_level - 1},${postData.tma_level - 1 > 1 ? 1 : 0},${isOnline ? 1 : 0},*`;
-
-  let response = await SerialPortSocket.write(command);
-
-  console.log("status public");
-  console.log(response);
-
   NodeWebCam.capture('telemetry', { callbackReturn: "base64" }, async function (err, data) {
-    if (err) return console.error(err);
+    if (err) console.error(err);
 
-    postData = {...postData, camera: data}
-  
+    if (!tmaChange) {
+      postData.camera = data
+    }
+
     await fetch(`${BACKEND_URL}/telemetry`, {
       method: "POST",
       body: JSON.stringify(postData),
@@ -249,7 +245,7 @@ client.on("reconnect", (error) => {
 });
 
 client.on("error", (error) => {
-  console.log(`Cannot connect(${program.protocol}):`, error);
+  console.log(`Cannot connect:`, error);
 });
 
 client.on("message", (topic, payload) => {
@@ -287,28 +283,6 @@ client.on("message", (topic, payload) => {
       }
     }, settings.event_based_time * 1000);
 });
-
-settings.time_based &&
-  setInterval(async () => {
-    console.log("logged");
-
-    await write();
-
-    await postToApi();
-  }, settings.time_based_time * 60000);
-
-settings.event_based &&
-  setInterval(async () => {
-    console.log("event logged");
-
-    await write();
-
-    if (currentStatusTma == 1) {
-      await postToApi();
-
-      currentStatusTma = 4;
-    }
-  }, event_based_time * 1000);
 
 io.on("connection", (socket) => {
   console.log("a user connected");
