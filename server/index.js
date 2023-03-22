@@ -214,6 +214,8 @@ client.on("connect", () => {
 
     await SerialPortSocket.setSelectedPort("/dev/ttyUSB0");
 
+    if (SerialPortSocket.getSelectedPort() == "") return;
+
     timeBasedInterval =
       (settings.time_based || settings.time_based == 1) &&
       setInterval(async () => {
