@@ -33,12 +33,20 @@ const mqttPort = "1883";
 const mqttClientId = `mqtt_${Math.random().toString(16).slice(3)}`;
 const SerialNode = process.env.SERIAL;
 const BACKEND_URL = process.env.BACKEND_URL;
+const TMA_MODE = process.env.TMA_MODE;
+
+const TMA_MODES = {
+  reverse: "REVERSE",
+  normal: "NORMAL"
+}
+
 let postData = {};
 let currentStatusTma = 4;
 let settings = {};
 let tmaChange = false;
+let isOnline = false;
 
-const checkConnection = () => {
+const checkConnection = async () => {
   require("dns").resolve("www.google.com", function (err) {
     if (err) {
       isOnline = 0;
@@ -46,6 +54,8 @@ const checkConnection = () => {
       isOnline = 1;
     }
   });
+
+  await SerialPortSocket.write(`0,0,${isOnline},*`);
 }
 
 checkConnection()
@@ -171,6 +181,21 @@ const write = async () => {
     arus: current,
     debit_air: 0,
   };
+
+  let buzzerOff = true
+  let turnOnBuzzer = currentStatusTma === 1 && buzzerOff ? 1 : 0
+
+  let turnOnIndicator
+
+  if (TMA_MODE === TMA_MODES.reverse) {
+    turnOnIndicator = postData.tma_level === 4 ? 0 : (postData.tma_level === 1 ? 3 : (postData.tma_level === 3 ? 1 : 2));
+  } else if (TMA_MODE === TMA_MODES.normal) {
+    turnOnIndicator = postData.tma_level === 4 ? 0 : postData.tma_level;
+  }
+
+  let command = `${turnOnIndicator},${turnOnBuzzer},1,*`;
+
+  await SerialPortSocket.write(command);
 };
 
 const postToApi = async () => {
@@ -217,7 +242,7 @@ client.on("connect", () => {
       setInterval(async () => {
         console.log("logged");
 
-        write();
+        await write();
 
         await postToApi();
       }, settings.time_based_time * 60000);
@@ -227,9 +252,10 @@ client.on("connect", () => {
       setInterval(async () => {
         console.log("event logged");
 
-        write();
+        await write();
 
-        console.log(currentStatusTma);
+        console.log("Current Status TMA: " + currentStatusTma);
+        console.log("Water Level: " + postData.water_level)
 
         if (currentStatusTma == 1) {
           await postToApi();
@@ -262,7 +288,10 @@ client.on("message", (topic, payload) => {
     setInterval(async () => {
       console.log("logged");
 
-      write();
+      await write();
+
+      console.log("Current Status TMA: " + currentStatusTma)
+      console.log("Water Level: " + postData.water_level)
 
       await postToApi();
     }, settings.time_based_time * 60000);
@@ -272,9 +301,9 @@ client.on("message", (topic, payload) => {
     setInterval(async () => {
       console.log("event logged");
 
-      write();
+      await write();
 
-      console.log(currentStatusTma);
+      console.log("STATUS TMA", currentStatusTma)
 
       if (currentStatusTma == 1) {
         await postToApi();

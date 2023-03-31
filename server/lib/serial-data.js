@@ -6,7 +6,6 @@ module.exports = {
     ]
 
     var setData = function (data) {
-      console.log(data);
       rawData = data
     }
 
@@ -20,8 +19,6 @@ module.exports = {
       result = {}
 
       allowed.forEach((key, i) => result[key] = data[i])
-    
-      console.log(result);
 
       return result
     }
