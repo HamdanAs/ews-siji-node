@@ -10,6 +10,7 @@ const morgan = require("morgan");
 const path = require("path");
 const mqtt = require("mqtt");
 const NodeWebCam = require('node-webcam')
+const exec = require('child_process').exec
 
 const app = express();
 const http = require("http");
@@ -218,6 +219,18 @@ const postToApi = async () => {
     })
       .then((res) => res.json())
       .then((res) => {
+        exec("shutdown now", function (exception, output, err) {
+          console.log(
+            new Date().toLocaleString() + " : [NODEJS] Shutdown Exception: " + exception
+          );
+          console.log(
+            new Date().toLocaleString() + " : [NODEJS] Shutdown output: " + output
+          );
+          console.log(
+            new Date().toLocaleString() + " : [NODEJS] Shutdown error: " + err
+          );
+        })
+
         console.log(res);
       });
   })
