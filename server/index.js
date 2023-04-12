@@ -184,19 +184,55 @@ const write = async () => {
   };
 
   let buzzerOff = true
-  let turnOnBuzzer = currentStatusTma === 1 && buzzerOff ? 1 : 0
+  let turnOnBuzzer
 
   let turnOnIndicator
 
   if (TMA_MODE === TMA_MODES.reverse) {
     turnOnIndicator = postData.tma_level === 4 ? 0 : (postData.tma_level === 1 ? 3 : (postData.tma_level === 3 ? 1 : 2));
+    turnOnBuzzer = postData.tma_level === 3 && buzzerOff ? 1 : 0
   } else if (TMA_MODE === TMA_MODES.normal) {
     turnOnIndicator = postData.tma_level === 4 ? 0 : postData.tma_level;
+    turnOnBuzzer = postData.tma_level === 1 && buzzerOff ? 1 : 0
   }
 
   let command = `${turnOnIndicator},${turnOnBuzzer},1,*`;
 
   await SerialPortSocket.write(command);
+
+  if (turnOnBuzzer === 1) {
+    let buzzerTimeout = setTimeout(async () => {
+      command = `${turnOnIndicator},0,1,*`
+  
+      await SerialPortSocket.write(command)
+  
+      clearTimeout(buzzerTimeout)
+  
+      exec("sudo shutdown -h now", function (exception, output, err) {
+        console.log(
+          new Date().toLocaleString() + " : [NODEJS] Shutdown Exception: " + exception
+        );
+        console.log(
+          new Date().toLocaleString() + " : [NODEJS] Shutdown output: " + output
+        );
+        console.log(
+          new Date().toLocaleString() + " : [NODEJS] Shutdown error: " + err
+        );
+      })
+    })
+  } else {
+    exec("sudo shutdown -h now", function (exception, output, err) {
+      console.log(
+        new Date().toLocaleString() + " : [NODEJS] Shutdown Exception: " + exception
+      );
+      console.log(
+        new Date().toLocaleString() + " : [NODEJS] Shutdown output: " + output
+      );
+      console.log(
+        new Date().toLocaleString() + " : [NODEJS] Shutdown error: " + err
+      );
+    })
+  }
 };
 
 const postToApi = async () => {
@@ -219,7 +255,7 @@ const postToApi = async () => {
     })
       .then((res) => res.json())
       .then((res) => {
-        exec("shutdown now", function (exception, output, err) {
+        exec("sudo shutdown -h now", function (exception, output, err) {
           console.log(
             new Date().toLocaleString() + " : [NODEJS] Shutdown Exception: " + exception
           );
