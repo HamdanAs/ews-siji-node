@@ -103,7 +103,7 @@ const shutdown = () => {
 };
 
 const write = async () => {
-  if (count === 2) return shutdown()
+  if (dataCount === 2) return shutdown()
 
   let telemetry = await SerialPortSocket.write("REQ,*");
 
