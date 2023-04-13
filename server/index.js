@@ -9,8 +9,8 @@ const helmet = require("helmet");
 const morgan = require("morgan");
 const path = require("path");
 const mqtt = require("mqtt");
-const NodeWebCam = require('node-webcam')
-const exec = require('child_process').exec
+const NodeWebCam = require("node-webcam");
+const exec = require("child_process").exec;
 
 const app = express();
 const http = require("http");
@@ -29,8 +29,8 @@ app.use(morgan("combined"));
 
 SerialPortSocket.init();
 
-const mqttHost = "193.168.195.119";
-const mqttPort = "1883";
+const mqttHost = process.env.MQTT_HOST;
+const mqttPort = process.env.MQTT_PORT;
 const mqttClientId = `mqtt_${Math.random().toString(16).slice(3)}`;
 const SerialNode = process.env.SERIAL;
 const BACKEND_URL = process.env.BACKEND_URL;
@@ -38,14 +38,15 @@ const TMA_MODE = process.env.TMA_MODE;
 
 const TMA_MODES = {
   reverse: "REVERSE",
-  normal: "NORMAL"
-}
+  normal: "NORMAL",
+};
 
 let postData = {};
 let currentStatusTma = 4;
 let settings = {};
 let tmaChange = false;
 let isOnline = false;
+let dataCount = 0;
 
 const checkConnection = async () => {
   require("dns").resolve("www.google.com", function (err) {
@@ -57,9 +58,9 @@ const checkConnection = async () => {
   });
 
   await SerialPortSocket.write(`0,0,${isOnline},*`);
-}
+};
 
-checkConnection()
+checkConnection();
 
 let fetchSetting = async () => {
   let telemetrySetting = await fetch(
@@ -85,7 +86,25 @@ const topic = "EWS.Settings." + SerialNode;
 
 const client = mqtt.connect(mqttConnectUrl, MQTT_OPTIONS);
 
+const shutdown = () => {
+  exec("sudo shutdown -h now", function (exception, output, err) {
+    console.log(
+      new Date().toLocaleString() +
+        " : [NODEJS] Shutdown Exception: " +
+        exception
+    );
+    console.log(
+      new Date().toLocaleString() + " : [NODEJS] Shutdown output: " + output
+    );
+    console.log(
+      new Date().toLocaleString() + " : [NODEJS] Shutdown error: " + err
+    );
+  });
+};
+
 const write = async () => {
+  if (count === 2) return shutdown()
+
   let telemetry = await SerialPortSocket.write("REQ,*");
 
   console.log("Data Telemetri Diambil");
@@ -158,7 +177,7 @@ const write = async () => {
     }
   };
 
-  tmaChange = currentStatusTma === statusTMA()
+  tmaChange = currentStatusTma === statusTMA();
 
   currentStatusTma = statusTMA();
 
@@ -183,93 +202,66 @@ const write = async () => {
     debit_air: 0,
   };
 
-  let buzzerOff = true
-  let turnOnBuzzer
+  let buzzerOff = true;
+  let turnOnBuzzer;
 
-  let turnOnIndicator
+  let turnOnIndicator;
 
   if (TMA_MODE === TMA_MODES.reverse) {
-    turnOnIndicator = postData.tma_level === 4 ? 0 : (postData.tma_level === 1 ? 3 : (postData.tma_level === 3 ? 1 : 2));
-    turnOnBuzzer = postData.tma_level === 3 && buzzerOff ? 1 : 0
+    turnOnIndicator =
+      postData.tma_level === 4
+        ? 0
+        : postData.tma_level === 1
+        ? 3
+        : postData.tma_level === 3
+        ? 1
+        : 2;
+    turnOnBuzzer = postData.tma_level === 3 && buzzerOff ? 1 : 0;
   } else if (TMA_MODE === TMA_MODES.normal) {
     turnOnIndicator = postData.tma_level === 4 ? 0 : postData.tma_level;
-    turnOnBuzzer = postData.tma_level === 1 && buzzerOff ? 1 : 0
+    turnOnBuzzer = postData.tma_level === 1 && buzzerOff ? 1 : 0;
   }
 
   let command = `${turnOnIndicator},${turnOnBuzzer},1,*`;
 
   await SerialPortSocket.write(command);
 
-  if (turnOnBuzzer === 1) {
-    let buzzerTimeout = setTimeout(async () => {
-      command = `${turnOnIndicator},0,1,*`
-  
-      await SerialPortSocket.write(command)
-  
-      clearTimeout(buzzerTimeout)
-  
-      exec("sudo shutdown -h now", function (exception, output, err) {
-        console.log(
-          new Date().toLocaleString() + " : [NODEJS] Shutdown Exception: " + exception
-        );
-        console.log(
-          new Date().toLocaleString() + " : [NODEJS] Shutdown output: " + output
-        );
-        console.log(
-          new Date().toLocaleString() + " : [NODEJS] Shutdown error: " + err
-        );
-      })
-    })
-  } else {
-    exec("sudo shutdown -h now", function (exception, output, err) {
-      console.log(
-        new Date().toLocaleString() + " : [NODEJS] Shutdown Exception: " + exception
-      );
-      console.log(
-        new Date().toLocaleString() + " : [NODEJS] Shutdown output: " + output
-      );
-      console.log(
-        new Date().toLocaleString() + " : [NODEJS] Shutdown error: " + err
-      );
-    })
-  }
+  let buzzerTimeout = setTimeout(async () => {
+    command = `${turnOnIndicator},0,1,*`;
+
+    await SerialPortSocket.write(command);
+
+    clearTimeout(buzzerTimeout);
+  }, 1000 * settings.timer_alarm);
 };
 
 const postToApi = async () => {
-  checkConnection()
+  checkConnection();
 
-  NodeWebCam.capture('telemetry', { callbackReturn: "base64" }, async function (err, data) {
-    if (err) console.error(err);
+  NodeWebCam.capture(
+    "telemetry",
+    { callbackReturn: "base64" },
+    async function (err, data) {
+      if (err) console.error(err);
 
-    if (!tmaChange) {
-      postData.camera = data
+      if (!tmaChange) {
+        postData.camera = data;
+      }
+
+      await fetch(`${BACKEND_URL}/telemetry`, {
+        method: "POST",
+        body: JSON.stringify(postData),
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+      })
+        .then((res) => res.json())
+        .then((res) => {
+          dataCount++;
+        });
     }
-
-    await fetch(`${BACKEND_URL}/telemetry`, {
-      method: "POST",
-      body: JSON.stringify(postData),
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-    })
-      .then((res) => res.json())
-      .then((res) => {
-        exec("sudo shutdown -h now", function (exception, output, err) {
-          console.log(
-            new Date().toLocaleString() + " : [NODEJS] Shutdown Exception: " + exception
-          );
-          console.log(
-            new Date().toLocaleString() + " : [NODEJS] Shutdown output: " + output
-          );
-          console.log(
-            new Date().toLocaleString() + " : [NODEJS] Shutdown error: " + err
-          );
-        })
-
-        console.log(res);
-      });
-  })
+  );
 };
 
 let timeBasedInterval;
@@ -304,7 +296,7 @@ client.on("connect", () => {
         await write();
 
         console.log("Current Status TMA: " + currentStatusTma);
-        console.log("Water Level: " + postData.water_level)
+        console.log("Water Level: " + postData.water_level);
 
         if (currentStatusTma == 1) {
           await postToApi();
@@ -339,8 +331,8 @@ client.on("message", (topic, payload) => {
 
       await write();
 
-      console.log("Current Status TMA: " + currentStatusTma)
-      console.log("Water Level: " + postData.water_level)
+      console.log("Current Status TMA: " + currentStatusTma);
+      console.log("Water Level: " + postData.water_level);
 
       await postToApi();
     }, settings.time_based_time * 60000);
@@ -352,7 +344,7 @@ client.on("message", (topic, payload) => {
 
       await write();
 
-      console.log("STATUS TMA", currentStatusTma)
+      console.log("STATUS TMA", currentStatusTma);
 
       if (currentStatusTma == 1) {
         await postToApi();
