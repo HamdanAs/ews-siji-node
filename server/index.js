@@ -224,6 +224,8 @@ const write = async () => {
 
   let command = `${turnOnIndicator},${turnOnBuzzer},1,*`;
 
+  console.log("Command terkirim: " + command);
+
   await SerialPortSocket.write(command);
 
   let buzzerTimeout = setTimeout(async () => {
@@ -232,6 +234,8 @@ const write = async () => {
     await SerialPortSocket.write(command);
 
     clearTimeout(buzzerTimeout);
+
+    return shutdown()
   }, 1000 * settings.timer_alarm);
 };
 
@@ -259,6 +263,9 @@ const postToApi = async () => {
         .then((res) => res.json())
         .then((res) => {
           dataCount++;
+          console.log("Data Count: " + dataCount);
+          console.log(res);
+          if (dataCount === 2) return shutdown()
         });
     }
   );
