@@ -1,55 +1,28 @@
-require("dotenv").config();
+const serialport = require("serialport");
+const { ReadlineParser } = require("@serialport/parser-readline");
+const axios = require("axios");
 
-const { SerialPortSocket } = require("./lib/serialport");
-const { routes } = require("./routes/api");
-const express = require("express");
-const bodyParser = require("body-parser");
-const cors = require("cors");
-const helmet = require("helmet");
-const morgan = require("morgan");
-const path = require("path");
-const mqtt = require("mqtt");
-const NodeWebCam = require("node-webcam");
-const exec = require("child_process").exec;
+const SerialPort = serialport.SerialPort;
 
-const app = express();
-const http = require("http");
-const server = http.createServer(app);
-const { Server } = require("socket.io");
-const io = new Server(server, {
-  cors: {
-    origin: ["http://localhost:5173", "http://127.0.0.1:5173"],
-  },
-});
-
-app.use(helmet());
-app.use(bodyParser.json());
-app.use(cors());
-app.use(morgan("combined"));
-
-SerialPortSocket.init();
-
+// Data dari ENV
 const mqttHost = process.env.MQTT_HOST;
 const mqttPort = process.env.MQTT_PORT;
 const mqttClientId = `mqtt_${Math.random().toString(16).slice(3)}`;
 const SerialNode = process.env.SERIAL;
 const BACKEND_URL = process.env.BACKEND_URL;
 const TMA_MODE = process.env.TMA_MODE;
-const dataType = process.env.DATA_TYPE || "RAW"
 
-const TMA_MODES = {
-  reverse: "REVERSE",
-  normal: "NORMAL",
-};
+// konfigurasi port serial
+const port = new SerialPort("/dev/ttyUSB0", {
+  baudRate: 9600,
+});
 
-let postData = {};
-let currentStatusTma = 4;
-let settings = {};
-let tmaChange = false;
-let isOnline = false;
-let dataCount = 0;
+// konfigurasi parser untuk data dari port serial
+const parser = port.pipe(new ReadlineParser({ delimiter: "\r\n" }));
 
-const checkConnection = async () => {
+let globalSettings = {};
+
+const checkConnection = () => {
   require("dns").resolve("www.google.com", function (err) {
     if (err) {
       isOnline = 0;
@@ -58,7 +31,7 @@ const checkConnection = async () => {
     }
   });
 
-  await SerialPortSocket.write(`0,0,${isOnline},*`);
+  port.write(`0,0,${isOnline},*`);
 };
 
 checkConnection();
@@ -68,340 +41,193 @@ let fetchSetting = async () => {
     `${BACKEND_URL}/node-setting/${SerialNode}`
   );
   let response = await telemetrySetting.json();
-  settings = response;
+  globalSettings = response;
 };
 
-// connect options
-const MQTT_OPTIONS = {
-  mqttClientId,
-  clean: true,
-  connectTimeout: 4000,
-  username: "emqx",
-  password: "public",
-  reconnectPeriod: 1000,
-};
+// variabel global untuk menyimpan data dari port serial
+let parsedData = null;
 
-let mqttConnectUrl = `mqtt://${mqttHost}:${mqttPort}`;
+// konfigurasi pengiriman data ke API setiap 1 menit sekali dengan batas maksimum pengiriman data sebanyak 2 kali
+let counter = 0;
+const interval = setInterval(() => {
+  if (counter < 2) {
+    port.write("REQ,*");
+    counter++;
+  } else {
+    clearInterval(interval);
+    console.log(
+      "Program berhenti karena sudah mengirimkan data sebanyak 2 kali atau tidak ada data yang diterima dari port serial"
+    );
+  }
+}, 60 * 1000);
 
-const topic = "EWS.Settings." + SerialNode;
+// fungsi untuk mengirim data ke API
+function sendToAPI(data) {
+  // kirim data ke API
+  axios
+    .post("https://example.com/api/data", data)
+    .then((response) => {
+      console.log("Berhasil mengirimkan data ke API:", response.data);
+    })
+    .catch((error) => {
+      console.log("Gagal mengirimkan data ke API:", error);
+    });
+}
 
 const client = mqtt.connect(mqttConnectUrl, MQTT_OPTIONS);
+const topic = "EWS.Settings." + SerialNode;
 
-const shutdown = () => {
-  exec("sudo shutdown -h now", function (exception, output, err) {
-    console.log(
-      new Date().toLocaleString() +
-        " : [NODEJS] Shutdown Exception: " +
-        exception
-    );
-    console.log(
-      new Date().toLocaleString() + " : [NODEJS] Shutdown output: " + output
-    );
-    console.log(
-      new Date().toLocaleString() + " : [NODEJS] Shutdown error: " + err
-    );
+// event saat terhubung dengan broker MQTT
+client.on("connect", async () => {
+  console.log("Terhubung dengan broker MQTT");
+
+  await fetchSetting().then(() => {
+    // subscribe ke topik setting untuk setiap serial port
+    client.subscribe(topic, () => {
+      console.log("MQTT: Subscribe ke topic: " + topic);
+    });
   });
-};
+});
 
-const write = async () => {
-  if (dataCount === 1) return shutdown()
+// event saat menerima pesan dari broker MQTT
+client.on("message", (topic, message) => {
+  console.log("Pesan dari broker MQTT:", message.toString());
 
-  let telemetry = await SerialPortSocket.write("REQ,*");
+  // parsing pesan menjadi objek JavaScript
+  const settings = JSON.parse(message.toString());
 
-  console.log("Data Telemetri Diambil");
+  // simpan pengaturan pada variabel global
+  globalSettings = settings;
 
-  let RainBucket = new Date();
-  let temperature = parseFloat( dataType == "RAW" ?  (telemetry.temp / 10) : telemetry.temp);
-  let humidity = parseFloat(dataType == "RAW" ? (telemetry.humidity / 10) : telemetry.humidity);
-  let pressure = parseFloat(telemetry.pressure);
-  let wind_dir = telemetry.wind_direction;
-  let wind_speed = parseFloat(telemetry.wind_speed);
-  let distance = parseFloat(telemetry.distance);
-  let rain_bucket = parseFloat(telemetry.rain_bucket);
-  let lux = parseFloat(telemetry.lux);
-  let current = telemetry.current;
-  let voltage = telemetry.voltage;
+  // clear interval saat menerima pesan setting baru
+  clearInterval(interval);
 
-  let rain_gauge = function () {
-    let rain_gauge_real = 0;
+  // buat interval baru dengan waktu dan durasi yang disesuaikan
+  const timer = settings.time_based_time * 60000;
+  const maxCount = 2;
+
+  counter = 0;
+  setInterval(() => {
+    if (counter < maxCount) {
+      port.write("REQ,*");
+      counter++;
+    } else {
+      clearInterval(interval);
+      console.log(
+        "Program berhenti karena sudah mengirimkan data sebanyak 2 kali atau tidak ada data yang diterima dari port serial"
+      );
+    }
+  }, timer);
+});
+
+function calculateTma(distance) {
+  let h0 = parseFloat(globalSettings.h0);
+  let h1 = parseFloat(globalSettings.h1);
+  let h2 = globalSettings.jarak_maksimal_sensor_tma * 100 - distance;
+
+  return h1 + h0 - h2 <= 0 ? 0 : h1 + h0 - h2;
+}
+
+function calculateStatusTma(waterLevel) {
+  let siaga1 = globalSettings.siaga1;
+  let siaga2 = globalSettings.siaga2;
+  let siaga3 = globalSettings.siaga3;
+
+  if (waterLevel < siaga3) {
+    return 4;
+  }
+
+  if (waterLevel >= siaga3 && waterLevel < siaga2) {
+    return 3;
+  }
+
+  if (waterLevel >= siaga2 && waterLevel < siaga1) {
+    return 2;
+  }
+
+  if (waterLevel > siaga1) {
+    return 1;
+  }
+}
+
+function calculateRainGauge(rainBucket, prevRainBucket) {
+  let rain_gauge_real = 0;
 
     let RainBucketNow = new Date();
-    let globalRain = rain_bucket;
+    let globalRain = rainBucket;
 
-    if ((RainBucketNow - RainBucket) / 60000 >= 1) {
+    if ((RainBucketNow - prevRainBucket) / 60000 >= 1) {
       rain_gauge_real = globalRain / ((RainBucketNow - RainBucket) / 60000);
       rain_gauge_real = rain_gauge_real <= 0 ? 0 : rain_gauge_real;
       rain_gauge_real = rain_gauge_real >= 8 ? 8 : rain_gauge_real;
     }
 
     return rain_gauge_real;
+}
+
+// event saat port serial terbuka
+port.on("open", () => {
+  console.log("Port serial terbuka");
+});
+
+// event saat menerima data dari port serial
+parser.on("data", (data) => {
+  console.log("Data dari port serial:", data);
+
+  // parsing data menjadi objek JavaScript
+  const [
+    temperature,
+    humidity,
+    pressure,
+    windDirection,
+    windSpeed,
+    distance,
+    rainBucket,
+    lux,
+    current,
+    voltage,
+    statusSiaga,
+    statusAlarm,
+  ] = data.split(",");
+
+  parsedData = {
+    temperature: parseFloat(temperature),
+    humidity: parseFloat(humidity),
+    pressure: parseFloat(pressure),
+    windDirection: parseFloat(windDirection),
+    windSpeed: parseFloat(windSpeed),
+    distance: parseFloat(distance),
+    rainBucket: parseFloat(rainBucket),
+    lux: parseFloat(lux),
+    current: parseFloat(current),
+    voltage: parseFloat(voltage),
+    statusSiaga: statusSiaga === "1",
+    statusAlarm: statusAlarm === "1",
   };
 
-  let altitude = function () {
-    return (
-      ((temperature + 273.15) / -0.0065) *
-      (Math.pow(
-        (pressure * 100) / 101370,
-        (-8.31432 * -0.0065) / (9.80665 * 0.0289644)
-      ) -
-        1)
-    );
-  };
-
-  let TMA = function () {
-    let h0 = parseFloat(settings.h0);
-    let h1 = parseFloat(settings.h1);
-    let h2 = settings.jarak_maksimal_sensor_tma * 100 - distance;
-
-    return h1 + h0 - h2 <= 0 ? 0 : h1 + h0 - h2;
-  };
-
-  let statusTMA = function () {
-    let siaga1 = settings.siaga1;
-    let siaga2 = settings.siaga2;
-    let siaga3 = settings.siaga3;
-
-    if (TMA() < siaga3) {
-      return 4;
-    }
-
-    if (TMA() >= siaga3 && TMA() < siaga2) {
-      return 3;
-    }
-
-    if (TMA() >= siaga2 && TMA() < siaga1) {
-      return 2;
-    }
-
-    if (TMA() > siaga1) {
-      return 1;
-    }
-  };
-
-  tmaChange = currentStatusTma === statusTMA();
-
-  currentStatusTma = statusTMA();
+  let waterLevel = calculateTma(parseFloat(distance))
 
   postData = {
     serial_number: SerialNode,
-    tma_level: statusTMA(),
-    temperature: temperature,
-    humidity: humidity,
-    atmospheric_pressure: pressure,
-    wind_direction: wind_dir,
-    wind_speed: wind_speed,
+    tma_level: calculateStatusTma(waterLevel),
+    temperature: parseFloat(temperature),
+    humidity: parseFloat(humidity),
+    atmospheric_pressure: parseFloat(pressure),
+    wind_direction: parseFloat(windDirection),
+    wind_speed: parseFloat(windSpeed),
     rain_gauge: rain_gauge(),
-    water_level: TMA(),
-    lat: settings.lat,
-    lng: settings.lng,
+    water_level: waterLevel,
+    lat: globalSettings.lat,
+    lng: globalSettings.lng,
     alt: altitude(),
     result_camera: null,
-    current_condition: lux,
-    voltage: voltage,
+    current_condition: parseFloat(lux),
+    voltage: parseFloat(voltage),
     batery_consumption: 50,
-    arus: current,
+    arus: parseFloat(current),
     debit_air: 0,
   };
 
-  let buzzerOff = true;
-  let turnOnBuzzer;
-
-  let turnOnIndicator;
-
-  if (TMA_MODE === TMA_MODES.reverse) {
-    turnOnIndicator =
-      postData.tma_level === 4
-        ? 0
-        : postData.tma_level === 1
-        ? 3
-        : postData.tma_level === 3
-        ? 1
-        : 2;
-    turnOnBuzzer = postData.tma_level === 3 && buzzerOff ? 1 : 0;
-  } else if (TMA_MODE === TMA_MODES.normal) {
-    turnOnIndicator = postData.tma_level === 4 ? 0 : postData.tma_level;
-    turnOnBuzzer = postData.tma_level === 1 && buzzerOff ? 1 : 0;
-  }
-
-  let command = `${turnOnIndicator},${turnOnBuzzer},1,*`;
-
-  console.log("Command terkirim: " + command);
-
-  await SerialPortSocket.write(command);
-
-  let buzzerTimeout = setTimeout(async () => {
-    command = `${turnOnIndicator},0,1,*`;
-
-    await SerialPortSocket.write(command);
-
-    clearTimeout(buzzerTimeout);
-
-    return shutdown()
-  }, 1000 * settings.timer_alarm);
-};
-
-const postToApi = async () => {
-  checkConnection();
-
-  NodeWebCam.capture(
-    "telemetry",
-    { callbackReturn: "base64" },
-    async function (err, data) {
-      if (err) console.error(err);
-
-      if (!tmaChange) {
-        postData.camera = data;
-      }
-
-      await fetch(`${BACKEND_URL}/telemetry`, {
-        method: "POST",
-        body: JSON.stringify(postData),
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
-      })
-        .then((res) => res.json())
-        .then((res) => {
-          dataCount++;
-          console.log("Data Count: " + dataCount);
-          console.log(res);
-          if (dataCount === 2) return shutdown()
-        });
-    }
-  );
-};
-
-let timeBasedInterval;
-let eventBasedInterval;
-
-client.on("connect", () => {
-  console.log(`mqtt: Connected`);
-  client.subscribe([topic], async () => {
-    console.log(`mqtt: Subscribe to topic '${topic}'`);
-
-    await fetchSetting();
-
-    await SerialPortSocket.setSelectedPort(process.env.PORT);
-
-    if (SerialPortSocket.getSelectedPort() == "") return;
-
-    timeBasedInterval =
-      (settings.time_based || settings.time_based == 1) &&
-      setInterval(async () => {
-        console.log("logged");
-
-        await write();
-
-        await postToApi();
-      }, settings.time_based_time * 60000);
-
-    eventBasedInterval =
-      (settings.event_based || settings.event_based == 1) &&
-      setInterval(async () => {
-        console.log("event logged");
-
-        await write();
-
-        console.log("Current Status TMA: " + currentStatusTma);
-        console.log("Water Level: " + postData.water_level);
-
-        if (currentStatusTma == 1) {
-          await postToApi();
-
-          currentStatusTma = 4;
-        }
-      }, settings.event_based_time * 1000);
-  });
-});
-
-client.on("reconnect", (error) => {
-  console.log(`Reconnecting(${program.protocol}):`, error);
-});
-
-client.on("error", (error) => {
-  console.log(`Cannot connect:`, error);
-});
-
-client.on("message", (topic, payload) => {
-  console.log("Received Message:", topic, payload.toString());
-
-  settings = JSON.parse(payload);
-  settings = settings.settings;
-
-  clearInterval(timeBasedInterval);
-  clearInterval(eventBasedInterval);
-
-  timeBasedInterval =
-    (settings.time_based || settings.time_based == 1) &&
-    setInterval(async () => {
-      console.log("logged");
-
-      await write();
-
-      console.log("Current Status TMA: " + currentStatusTma);
-      console.log("Water Level: " + postData.water_level);
-
-      await postToApi();
-    }, settings.time_based_time * 60000);
-
-  eventBasedInterval =
-    (settings.event_based || settings.event_based == 1) &&
-    setInterval(async () => {
-      console.log("event logged");
-
-      await write();
-
-      console.log("STATUS TMA", currentStatusTma);
-
-      if (currentStatusTma == 1) {
-        await postToApi();
-
-        currentStatusTma = 4;
-      }
-    }, settings.event_based_time * 1000);
-});
-
-io.on("connection", (socket) => {
-  console.log("a user connected");
-
-  socket.on("get port list", async () => {
-    io.emit("get port list", await SerialPortSocket.getPortList());
-  });
-
-  socket.on("get selected port", () => {
-    io.emit("get selected port", SerialPortSocket.getSelectedPort());
-  });
-
-  socket.on("set port", async (port) => {
-    await SerialPortSocket.setSelectedPort(port);
-
-    let selectedPort = SerialPortSocket.getSelectedPort();
-
-    io.emit("set port", selectedPort);
-  });
-
-  socket.on("write data", async (command) => {
-    console.log(command);
-
-    let response = await SerialPortSocket.write(command);
-
-    io.emit("write data", response);
-  });
-
-  socket.on("send status", async (command) => {
-    console.log(command);
-
-    await SerialPortSocket.write(command);
-  });
-
-  socket.on("disconnect", () => {
-    console.log("a user disconnected");
-  });
-});
-
-server.listen(8081, (error) => {
-  if (error) throw error;
-
-  console.log("Server created");
+  // kirim data ke API setelah parsing selesai
+  sendToAPI(parsedData);
 });
