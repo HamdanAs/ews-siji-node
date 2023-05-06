@@ -35,6 +35,7 @@ const mqttClientId = `mqtt_${Math.random().toString(16).slice(3)}`;
 const SerialNode = process.env.SERIAL;
 const BACKEND_URL = process.env.BACKEND_URL;
 const TMA_MODE = process.env.TMA_MODE;
+const dataType = process.env.DATA_TYPE || "RAW"
 
 const TMA_MODES = {
   reverse: "REVERSE",
@@ -103,15 +104,15 @@ const shutdown = () => {
 };
 
 const write = async () => {
-  if (dataCount === 2) return shutdown()
+  if (dataCount === 1) return shutdown()
 
   let telemetry = await SerialPortSocket.write("REQ,*");
 
   console.log("Data Telemetri Diambil");
 
   let RainBucket = new Date();
-  let temperature = parseFloat(telemetry.temp);
-  let humidity = parseFloat(telemetry.humidity);
+  let temperature = parseFloat( dataType == "RAW" ?  (telemetry.temp / 10) : telemetry.temp);
+  let humidity = parseFloat(dataType == "RAW" ? (telemetry.humidity / 10) : telemetry.humidity);
   let pressure = parseFloat(telemetry.pressure);
   let wind_dir = telemetry.wind_direction;
   let wind_speed = parseFloat(telemetry.wind_speed);
