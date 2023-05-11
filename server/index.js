@@ -1,6 +1,8 @@
+require('dotenv').config()
+
 const serialport = require("serialport");
 const { ReadlineParser } = require("@serialport/parser-readline");
-const axios = require("axios");
+const mqtt = require('mqtt')
 
 const SerialPort = serialport.SerialPort;
 
@@ -13,7 +15,8 @@ const BACKEND_URL = process.env.BACKEND_URL;
 const TMA_MODE = process.env.TMA_MODE;
 
 // konfigurasi port serial
-const port = new SerialPort("/dev/ttyUSB0", {
+const port = new SerialPort({
+  path: process.env.PORT,
   baudRate: 9600,
 });
 
@@ -64,15 +67,33 @@ const interval = setInterval(() => {
 // fungsi untuk mengirim data ke API
 function sendToAPI(data) {
   // kirim data ke API
-  axios
-    .post("https://example.com/api/data", data)
+  fetch(`${BACKEND_URL}/telemetry`, {
+    method: "POST",
+    body: JSON.stringify(data),
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+  })
+    .then(res => res.json())
     .then((response) => {
-      console.log("Berhasil mengirimkan data ke API:", response.data);
+      console.log("Berhasil mengirimkan data ke API:", response);
     })
     .catch((error) => {
       console.log("Gagal mengirimkan data ke API:", error);
     });
 }
+
+const MQTT_OPTIONS = {
+  mqttClientId,
+  clean: true,
+  connectTimeout: 4000,
+  username: "emqx",
+  password: "public",
+  reconnectPeriod: 1000,
+};
+
+let mqttConnectUrl = `mqtt://${mqttHost}:${mqttPort}`;
 
 const client = mqtt.connect(mqttConnectUrl, MQTT_OPTIONS);
 const topic = "EWS.Settings." + SerialNode;
@@ -150,19 +171,39 @@ function calculateStatusTma(waterLevel) {
   }
 }
 
-function calculateRainGauge(rainBucket, prevRainBucket) {
-  let rain_gauge_real = 0;
+let curahHujan = 0
 
-    let RainBucketNow = new Date();
-    let globalRain = rainBucket;
+function calculateRainGauge(rainBucket) {
+  // Baca data dari sensor rain bucket
+  let sensorData = rainBucket;
 
-    if ((RainBucketNow - prevRainBucket) / 60000 >= 1) {
-      rain_gauge_real = globalRain / ((RainBucketNow - RainBucket) / 60000);
-      rain_gauge_real = rain_gauge_real <= 0 ? 0 : rain_gauge_real;
-      rain_gauge_real = rain_gauge_real >= 8 ? 8 : rain_gauge_real;
-    }
+  // Hitung jumlah air yang terkumpul dalam wadah sensor
+  let jumlahAir = sensorData * 0.2;
 
-    return rain_gauge_real;
+  // Tambahkan jumlah air ke dalam variabel curah hujan
+  curahHujan += jumlahAir;
+
+  // Tampilkan hasil pengukuran
+  return curahHujan
+}
+
+function calculateAltitude(temperature, pressure) {
+  const P0 = 101325; // tekanan standar pada permukaan laut, dalam satuan Pa
+  const T0 = 288.15; // suhu standar pada permukaan laut, dalam satuan K
+  const L = 0.0065; // laju perubahan suhu dengan ketinggian, dalam satuan K/m
+  const g = 9.80665; // percepatan gravitasi, dalam satuan m/s^2
+  const M = 0.0289644; // massa molar udara, dalam satuan kg/mol
+  const R = 8.31432; // konstanta gas ideal, dalam satuan J/(mol*K)
+
+  const temperatureK = temperature + 273.15; // konversi suhu dari Celsius ke Kelvin
+  const pressurePa = pressure * 100; // konversi tekanan dari hektopascal (hPa) ke pascal (Pa)
+
+  const pressureRatio = pressurePa / P0;
+  const temperatureRatio = T0 / temperatureK;
+  const exponent = (g * M) / (R * L);
+  const altitudeMeters = ((T0 - (L * 0)) / L) * (1 - Math.pow(pressureRatio, exponent));
+
+  return altitudeMeters;
 }
 
 // event saat port serial terbuka
@@ -190,44 +231,38 @@ parser.on("data", (data) => {
     statusAlarm,
   ] = data.split(",");
 
-  parsedData = {
-    temperature: parseFloat(temperature),
-    humidity: parseFloat(humidity),
-    pressure: parseFloat(pressure),
-    windDirection: parseFloat(windDirection),
-    windSpeed: parseFloat(windSpeed),
-    distance: parseFloat(distance),
-    rainBucket: parseFloat(rainBucket),
-    lux: parseFloat(lux),
-    current: parseFloat(current),
-    voltage: parseFloat(voltage),
-    statusSiaga: statusSiaga === "1",
-    statusAlarm: statusAlarm === "1",
-  };
+  console.log("Status siaga: " + statusSiaga);
+  console.log("Status Alarm: " + statusAlarm)
 
   let waterLevel = calculateTma(parseFloat(distance))
+  let floatTemperature = parseFloat(temperature) / 10
+  let floatPressure = parseFloat(pressure) / 10
 
-  postData = {
+  parsedData = {
     serial_number: SerialNode,
     tma_level: calculateStatusTma(waterLevel),
-    temperature: parseFloat(temperature),
-    humidity: parseFloat(humidity),
-    atmospheric_pressure: parseFloat(pressure),
+    temperature: floatTemperature,
+    humidity: parseFloat(humidity) / 10,
+    atmospheric_pressure: floatPressure,
     wind_direction: parseFloat(windDirection),
     wind_speed: parseFloat(windSpeed),
-    rain_gauge: rain_gauge(),
+    rain_gauge: calculateRainGauge(parseFloat(rainBucket)),
     water_level: waterLevel,
     lat: globalSettings.lat,
     lng: globalSettings.lng,
-    alt: altitude(),
+    alt: calculateAltitude(floatTemperature, floatPressure),
     result_camera: null,
     current_condition: parseFloat(lux),
     voltage: parseFloat(voltage),
     batery_consumption: 50,
-    arus: parseFloat(current),
+    arus: parseFloat(current) / 1000,
     debit_air: 0,
   };
 
   // kirim data ke API setelah parsing selesai
   sendToAPI(parsedData);
+
+  let siaga = parsedData.tma_level === 2 ? 2 : (parsedData.tma_level === 3 ? 1 : (parsedData.tma_level === 1 ? 3 : 0))
+
+  port.write(`${siaga},0,1,*`)
 });
