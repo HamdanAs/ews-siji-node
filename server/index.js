@@ -1,8 +1,9 @@
-require('dotenv').config()
+require("dotenv").config();
 
 const serialport = require("serialport");
 const { ReadlineParser } = require("@serialport/parser-readline");
-const mqtt = require('mqtt')
+const mqtt = require("mqtt");
+const NodeWebcam = require("node-webcam");
 
 const SerialPort = serialport.SerialPort;
 
@@ -13,6 +14,17 @@ const mqttClientId = `mqtt_${Math.random().toString(16).slice(3)}`;
 const SerialNode = process.env.SERIAL;
 const BACKEND_URL = process.env.BACKEND_URL;
 const TMA_MODE = process.env.TMA_MODE;
+
+const Webcam = NodeWebcam.create({
+  width: 640,
+  height: 480,
+  delay: 0,
+  quality: 100,
+  output: "jpeg",
+  device: "/dev/v4l/by-id/usb-Generic_USB2.0_PC_CAMERA-video-index0",
+  verbose: false,
+  callbackReturn: "base64",
+});
 
 // konfigurasi port serial
 const port = new SerialPort({
@@ -75,13 +87,26 @@ function sendToAPI(data) {
       "Content-Type": "application/json",
     },
   })
-    .then(res => res.json())
+    .then((res) => res.json())
     .then((response) => {
       console.log("Berhasil mengirimkan data ke API:", response);
     })
     .catch((error) => {
       console.log("Gagal mengirimkan data ke API:", error);
     });
+}
+
+function captureAndSendToApi(cb, requestBody) {
+  Webcam.capture('/', function (err, data) {
+    if (err) {
+      console.error("Error camera:", err);
+    } else {
+      requestBody.image = data
+      cb(requestBody)
+      console.log(`Base64 Result: ${data}`);
+      console.log(`Foto berhasil disimpan di ${filePath}`);
+    }
+  });
 }
 
 const MQTT_OPTIONS = {
@@ -171,7 +196,7 @@ function calculateStatusTma(waterLevel) {
   }
 }
 
-let curahHujan = 0
+let curahHujan = 0;
 
 function calculateRainGauge(rainBucket) {
   // Baca data dari sensor rain bucket
@@ -184,7 +209,7 @@ function calculateRainGauge(rainBucket) {
   curahHujan += jumlahAir;
 
   // Tampilkan hasil pengukuran
-  return curahHujan
+  return curahHujan;
 }
 
 function calculateAltitude(temperature, pressure) {
@@ -201,7 +226,8 @@ function calculateAltitude(temperature, pressure) {
   const pressureRatio = pressurePa / P0;
   const temperatureRatio = T0 / temperatureK;
   const exponent = (g * M) / (R * L);
-  const altitudeMeters = ((T0 - (L * 0)) / L) * (1 - Math.pow(pressureRatio, exponent));
+  const altitudeMeters =
+    ((T0 - L * 0) / L) * (1 - Math.pow(pressureRatio, exponent));
 
   return altitudeMeters;
 }
@@ -232,11 +258,11 @@ parser.on("data", (data) => {
   ] = data.split(",");
 
   console.log("Status siaga: " + statusSiaga);
-  console.log("Status Alarm: " + statusAlarm)
+  console.log("Status Alarm: " + statusAlarm);
 
-  let waterLevel = calculateTma(parseFloat(distance))
-  let floatTemperature = parseFloat(temperature) / 10
-  let floatPressure = parseFloat(pressure) / 10
+  let waterLevel = calculateTma(parseFloat(distance));
+  let floatTemperature = parseFloat(temperature) / 10;
+  let floatPressure = parseFloat(pressure) / 10;
 
   parsedData = {
     serial_number: SerialNode,
@@ -260,9 +286,16 @@ parser.on("data", (data) => {
   };
 
   // kirim data ke API setelah parsing selesai
-  sendToAPI(parsedData);
+  captureAndSendToApi(sendToAPI, parsedData);
 
-  let siaga = parsedData.tma_level === 2 ? 2 : (parsedData.tma_level === 3 ? 1 : (parsedData.tma_level === 1 ? 3 : 0))
+  let siaga =
+    parsedData.tma_level === 2
+      ? 2
+      : parsedData.tma_level === 3
+      ? 1
+      : parsedData.tma_level === 1
+      ? 3
+      : 0;
 
-  port.write(`${siaga},0,1,*`)
+  port.write(`${siaga},0,1,*`);
 });
