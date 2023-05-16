@@ -14,6 +14,7 @@ const mqttClientId = `mqtt_${Math.random().toString(16).slice(3)}`;
 const SerialNode = process.env.SERIAL;
 const BACKEND_URL = process.env.BACKEND_URL;
 const TMA_MODE = process.env.TMA_MODE;
+const REPEAT = parseInt(process.env.REPEAT)
 
 const Webcam = NodeWebcam.create({
   width: 640,
@@ -21,7 +22,7 @@ const Webcam = NodeWebcam.create({
   delay: 0,
   quality: 100,
   output: "jpeg",
-  device: "/dev/v4l/by-id/usb-Generic_USB2.0_PC_CAMERA-video-index0",
+  device: "/dev/video0",
   verbose: false,
   callbackReturn: "base64",
 });
@@ -36,6 +37,7 @@ const port = new SerialPort({
 const parser = port.pipe(new ReadlineParser({ delimiter: "\r\n" }));
 
 let globalSettings = {};
+let isOnline = 0;
 
 const checkConnection = () => {
   require("dns").resolve("www.google.com", function (err) {
@@ -65,7 +67,7 @@ let parsedData = null;
 // konfigurasi pengiriman data ke API setiap 1 menit sekali dengan batas maksimum pengiriman data sebanyak 2 kali
 let counter = 0;
 const interval = setInterval(() => {
-  if (counter < 2) {
+  if (counter < REPEAT) {
     port.write("REQ,*");
     counter++;
   } else {
@@ -97,14 +99,14 @@ function sendToAPI(data) {
 }
 
 function captureAndSendToApi(cb, requestBody) {
-  Webcam.capture('/', function (err, data) {
+  Webcam.capture('telemetry.jpg', function (err, data) {
     if (err) {
       console.error("Error camera:", err);
     } else {
-      requestBody.image = data
+      requestBody.camera = data
       cb(requestBody)
       console.log(`Base64 Result: ${data}`);
-      console.log(`Foto berhasil disimpan di ${filePath}`);
+      console.log(`Foto berhasil disimpan di telemetry.jpg`);
     }
   });
 }
@@ -150,7 +152,7 @@ client.on("message", (topic, message) => {
 
   // buat interval baru dengan waktu dan durasi yang disesuaikan
   const timer = settings.time_based_time * 60000;
-  const maxCount = 2;
+  const maxCount = REPEAT;
 
   counter = 0;
   setInterval(() => {
@@ -240,6 +242,8 @@ port.on("open", () => {
 // event saat menerima data dari port serial
 parser.on("data", (data) => {
   console.log("Data dari port serial:", data);
+
+  if (data.split(",").length < 13) return;
 
   // parsing data menjadi objek JavaScript
   const [
