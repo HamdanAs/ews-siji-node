@@ -38,6 +38,7 @@ const parser = port.pipe(new ReadlineParser({ delimiter: "\r\n" }));
 
 let globalSettings = {};
 let isOnline = 0;
+let currentStatus = 0;
 
 const checkConnection = () => {
   require("dns").resolve("www.google.com", function (err) {
@@ -99,16 +100,20 @@ function sendToAPI(data) {
 }
 
 function captureAndSendToApi(cb, requestBody) {
-  Webcam.capture('telemetry.jpg', function (err, data) {
-    if (err) {
-      console.error("Error camera:", err);
-    } else {
-      requestBody.camera = data
-      cb(requestBody)
-      console.log(`Base64 Result: ${data}`);
-      console.log(`Foto berhasil disimpan di telemetry.jpg`);
-    }
-  });
+  if (currentStatus !== requestBody.tma_level) {
+    Webcam.capture('telemetry.jpg', function (err, data) {
+      if (err) {
+        console.error("Error camera:", err);
+      } else {
+        requestBody.camera = data
+        cb(requestBody)
+        console.log(`Base64 Result: ${data}`);
+        console.log(`Foto berhasil disimpan di telemetry.jpg`);
+      }
+    });
+  } else {
+    cb(requestBody)
+  }
 }
 
 const MQTT_OPTIONS = {
@@ -289,9 +294,6 @@ parser.on("data", (data) => {
     debit_air: 0,
   };
 
-  // kirim data ke API setelah parsing selesai
-  captureAndSendToApi(sendToAPI, parsedData);
-
   let siaga =
     parsedData.tma_level === 2
       ? 2
@@ -300,6 +302,14 @@ parser.on("data", (data) => {
       : parsedData.tma_level === 1
       ? 3
       : 0;
+
+  if (parsedData.tma_level !== currentStatus) {
+    currentStatus = parsedData.tma_level
+  }
+
+
+  // kirim data ke API setelah parsing selesai
+  captureAndSendToApi(sendToAPI, parsedData);
 
   port.write(`${siaga},0,1,*`);
 });
