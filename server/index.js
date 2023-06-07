@@ -1,5 +1,6 @@
 require("dotenv").config();
 
+const exec = require("child_process").exec;
 const serialport = require("serialport");
 const { ReadlineParser } = require("@serialport/parser-readline");
 const mqtt = require("mqtt");
@@ -13,8 +14,8 @@ const mqttPort = process.env.MQTT_PORT;
 const mqttClientId = `mqtt_${Math.random().toString(16).slice(3)}`;
 const SerialNode = process.env.SERIAL;
 const BACKEND_URL = process.env.BACKEND_URL;
-const TMA_MODE = process.env.TMA_MODE;
-const REPEAT = parseInt(process.env.REPEAT)
+const REPEAT = parseInt(process.env.REPEAT);
+const TMA_MODE = process.env.TMA_MODE | "REVERSE";
 
 const Webcam = NodeWebcam.create({
   width: 640,
@@ -39,6 +40,22 @@ const parser = port.pipe(new ReadlineParser({ delimiter: "\r\n" }));
 let globalSettings = {};
 let isOnline = 0;
 let currentStatus = 0;
+
+const shutdown = () => {
+  exec("sudo shutdown -h now", function (exception, output, err) {
+    console.log(
+      new Date().toLocaleString() +
+        " : [NODEJS] Shutdown Exception: " +
+        exception
+    );
+    console.log(
+      new Date().toLocaleString() + " : [NODEJS] Shutdown output: " + output
+    );
+    console.log(
+      new Date().toLocaleString() + " : [NODEJS] Shutdown error: " + err
+    );
+  });
+};
 
 const checkConnection = () => {
   require("dns").resolve("www.google.com", function (err) {
@@ -76,6 +93,7 @@ const interval = setInterval(() => {
     console.log(
       "Program berhenti karena sudah mengirimkan data sebanyak 2 kali atau tidak ada data yang diterima dari port serial"
     );
+    shutdown();
   }
 }, 60 * 1000);
 
@@ -100,20 +118,15 @@ function sendToAPI(data) {
 }
 
 function captureAndSendToApi(cb, requestBody) {
-  if (currentStatus !== requestBody.tma_level) {
-    Webcam.capture('telemetry.jpg', function (err, data) {
-      if (err) {
-        console.error("Error camera:", err);
-      } else {
-        requestBody.camera = data
-        cb(requestBody)
-        console.log(`Base64 Result: ${data}`);
-        console.log(`Foto berhasil disimpan di telemetry.jpg`);
-      }
-    });
-  } else {
-    cb(requestBody)
-  }
+  Webcam.capture("telemetry.jpg", function (err, data) {
+    if (err) {
+      console.error("Error camera:", err);
+    }
+    requestBody.camera = data;
+    cb(requestBody);
+    console.log(`Base64 Result: ${data}`);
+    console.log(`Foto berhasil disimpan di telemetry.jpg`);
+  });
 }
 
 const MQTT_OPTIONS = {
@@ -169,6 +182,7 @@ client.on("message", (topic, message) => {
       console.log(
         "Program berhenti karena sudah mengirimkan data sebanyak 2 kali atau tidak ada data yang diterima dari port serial"
       );
+      shutdown();
     }
   }, timer);
 });
@@ -294,19 +308,24 @@ parser.on("data", (data) => {
     debit_air: 0,
   };
 
-  let siaga =
-    parsedData.tma_level === 2
-      ? 2
-      : parsedData.tma_level === 3
-      ? 1
-      : parsedData.tma_level === 1
-      ? 3
-      : 0;
+  let siaga = parsedData.tma_level;
 
-  if (parsedData.tma_level !== currentStatus) {
-    currentStatus = parsedData.tma_level
+  if (TMA_MODE == "REVERSE") {
+    siaga =
+      parsedData.tma_level === 2
+        ? 2
+        : parsedData.tma_level === 3
+        ? 1
+        : parsedData.tma_level === 1
+        ? 3
+        : 0;
   }
 
+  if (parsedData.tma_level !== currentStatus) {
+    currentStatus = parsedData.tma_level;
+  }
+
+  console.log("Data terkirim:", parsedData);
 
   // kirim data ke API setelah parsing selesai
   captureAndSendToApi(sendToAPI, parsedData);
