@@ -309,6 +309,7 @@ parser.on("data", (data) => {
   };
 
   let siaga = parsedData.tma_level;
+  let alarm = parsedData.tma_level === 1;
 
   if (TMA_MODE == "REVERSE") {
     siaga =
@@ -319,6 +320,8 @@ parser.on("data", (data) => {
         : parsedData.tma_level === 1
         ? 3
         : 0;
+
+    alarm = siaga === 1;
   }
 
   if (parsedData.tma_level !== currentStatus) {
@@ -330,5 +333,5 @@ parser.on("data", (data) => {
   // kirim data ke API setelah parsing selesai
   captureAndSendToApi(sendToAPI, parsedData);
 
-  port.write(`${siaga},0,1,*`);
+  port.write(`${siaga},${alarm},1,*`);
 });
