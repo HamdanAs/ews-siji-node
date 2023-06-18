@@ -134,7 +134,7 @@ client.on("connect", async () => {
 
   client.publish(
     "request-setting",
-    JSON.stringify({ serial_number: serialNumber, type: 'NODE' })
+    JSON.stringify({ serial_number: SerialNode, type: 'NODE' })
   );
 });
 
@@ -147,6 +147,8 @@ client.on("message", (topic, message) => {
 
   // simpan pengaturan pada variabel global
   globalSettings = settings;
+
+  console.log(globalSettings);
 
   // clear interval saat menerima pesan setting baru
   clearInterval(interval);
