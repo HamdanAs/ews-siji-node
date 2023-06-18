@@ -130,12 +130,13 @@ client.on("connect", async () => {
 
   client.subscribe(topic, () => {
     console.log("MQTT: Subscribe ke topic: " + topic);
+    
+    client.publish(
+      "request-setting",
+      JSON.stringify({ serial_number: SerialNode, type: 'NODE' })
+    );
   });
 
-  client.publish(
-    "request-setting",
-    JSON.stringify({ serial_number: SerialNode, type: 'NODE' })
-  );
 });
 
 // event saat menerima pesan dari broker MQTT
@@ -148,7 +149,7 @@ client.on("message", (topic, message) => {
   // simpan pengaturan pada variabel global
   globalSettings = settings;
 
-  console.log(globalSettings);
+  console.log("Global setting sekarang:", globalSettings);
 
   // clear interval saat menerima pesan setting baru
   clearInterval(interval);
