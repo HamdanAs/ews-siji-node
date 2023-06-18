@@ -38,7 +38,6 @@ const port = new SerialPort({
 const parser = port.pipe(new ReadlineParser({ delimiter: "\r\n" }));
 
 let globalSettings = {};
-let isOnline = 0;
 let currentStatus = 0;
 
 const shutdown = () => {
@@ -55,28 +54,6 @@ const shutdown = () => {
       new Date().toLocaleString() + " : [NODEJS] Shutdown error: " + err
     );
   });
-};
-
-const checkConnection = () => {
-  require("dns").resolve("www.google.com", function (err) {
-    if (err) {
-      isOnline = 0;
-    } else {
-      isOnline = 1;
-    }
-  });
-
-  port.write(`0,0,${isOnline},*`);
-};
-
-checkConnection();
-
-let fetchSetting = async () => {
-  let telemetrySetting = await fetch(
-    `${BACKEND_URL}/node-setting/${SerialNode}`
-  );
-  let response = await telemetrySetting.json();
-  globalSettings = response;
 };
 
 // variabel global untuk menyimpan data dari port serial
@@ -97,38 +74,6 @@ const interval = setInterval(() => {
   }
 }, 60 * 1000);
 
-// fungsi untuk mengirim data ke API
-function sendToAPI(data) {
-  // kirim data ke API
-  fetch(`${BACKEND_URL}/telemetry`, {
-    method: "POST",
-    body: JSON.stringify(data),
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    },
-  })
-    .then((res) => res.json())
-    .then((response) => {
-      console.log("Berhasil mengirimkan data ke API:", response);
-    })
-    .catch((error) => {
-      console.log("Gagal mengirimkan data ke API:", error);
-    });
-}
-
-function captureAndSendToApi(cb, requestBody) {
-  Webcam.capture("telemetry.jpg", function (err, data) {
-    if (err) {
-      console.error("Error camera:", err);
-    }
-    requestBody.camera = data;
-    cb(requestBody);
-    console.log(`Base64 Result: ${data}`);
-    console.log(`Foto berhasil disimpan di telemetry.jpg`);
-  });
-}
-
 const MQTT_OPTIONS = {
   mqttClientId,
   clean: true,
@@ -143,16 +88,54 @@ let mqttConnectUrl = `mqtt://${mqttHost}:${mqttPort}`;
 const client = mqtt.connect(mqttConnectUrl, MQTT_OPTIONS);
 const topic = "EWS.Settings." + SerialNode;
 
+// fungsi untuk mengirim data ke API
+function sendToAPI(data) {
+  // kirim data ke API HTTP Method
+  // fetch(`${BACKEND_URL}/telemetry`, {
+  //   method: "POST",
+  //   body: JSON.stringify(data),
+  //   headers: {
+  //     Accept: "application/json",
+  //     "Content-Type": "application/json",
+  //   },
+  // })
+  //   .then((res) => res.json())
+  //   .then((response) => {
+  //     console.log("Berhasil mengirimkan data ke API:", response);
+  //   })
+  //   .catch((error) => {
+  //     console.log("Gagal mengirimkan data ke API:", error);
+  //   });
+
+  // kirim data ke MQTT
+  data.version = 2
+  client.publish("EWS.telemetry", JSON.stringify(data), { qos: 1 }, console.log);
+}
+
+function captureAndSendToApi(cb, requestBody) {
+  Webcam.capture("./telemetry.jpg", function (err, data) {
+    if (err) {
+      console.error("Error camera:", err);
+    }
+    requestBody.camera = data;
+    cb(requestBody);
+  });
+}
+
 // event saat terhubung dengan broker MQTT
 client.on("connect", async () => {
   console.log("Terhubung dengan broker MQTT");
 
-  await fetchSetting().then(() => {
-    // subscribe ke topik setting untuk setiap serial port
-    client.subscribe(topic, () => {
-      console.log("MQTT: Subscribe ke topic: " + topic);
-    });
+  port.write('0,0,1,*')
+
+  client.subscribe(topic, () => {
+    console.log("MQTT: Subscribe ke topic: " + topic);
   });
+
+  client.publish(
+    "request-setting",
+    JSON.stringify({ serial_number: serialNumber, type: 'NODE' })
+  );
 });
 
 // event saat menerima pesan dari broker MQTT
@@ -325,13 +308,13 @@ parser.on("data", (data) => {
   }
 
   if (parsedData.tma_level !== currentStatus) {
+    captureAndSendToApi(sendToAPI, parsedData);
     currentStatus = parsedData.tma_level;
+  } else {
+    sendToAPI(parsedData)
   }
 
-  console.log("Data terkirim:", parsedData);
-
-  // kirim data ke API setelah parsing selesai
-  captureAndSendToApi(sendToAPI, parsedData);
+  // console.log("Data terkirim:", parsedData);
 
   port.write(`${siaga},${alarm},1,*`);
 });
