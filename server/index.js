@@ -87,6 +87,7 @@ let mqttConnectUrl = `mqtt://${mqttHost}:${mqttPort}`;
 
 const client = mqtt.connect(mqttConnectUrl, MQTT_OPTIONS);
 const topic = "EWS.Settings." + SerialNode;
+const demoTopic = "EWS.Demo." + SerialNode;
 
 // fungsi untuk mengirim data ke API
 function sendToAPI(data) {
@@ -128,8 +129,9 @@ client.on("connect", async () => {
 
   port.write('0,0,1,*')
 
-  client.subscribe(topic, () => {
+  client.subscribe([topic, demoTopic], () => {
     console.log("MQTT: Subscribe ke topic: " + topic);
+    console.log("MQTT: Subscribe ke topic: " + demoTopic);
     
     client.publish(
       "request-setting",
@@ -139,9 +141,20 @@ client.on("connect", async () => {
 
 });
 
+let curahHujan = 0;
+let waterLevel = 0;
+
 // event saat menerima pesan dari broker MQTT
 client.on("message", (topic, message) => {
   console.log("Pesan dari broker MQTT:", message.toString());
+
+  if (topic === demoTopic) {
+    const result = JSON.parse(message.toString())
+
+    waterLevel = calculateTma(parseFloat(result.water_level))
+
+    port.write("REQ,*");
+  }
 
   // parsing pesan menjadi objek JavaScript
   const settings = JSON.parse(message.toString());
@@ -202,8 +215,6 @@ function calculateStatusTma(waterLevel) {
     return 1;
   }
 }
-
-let curahHujan = 0;
 
 function calculateRainGauge(rainBucket) {
   // Baca data dari sensor rain bucket
@@ -269,7 +280,10 @@ parser.on("data", (data) => {
   console.log("Status siaga: " + statusSiaga);
   console.log("Status Alarm: " + statusAlarm);
 
-  let waterLevel = calculateTma(parseFloat(distance));
+  if (waterLevel === 0) {
+    waterLevel = calculateTma(parseFloat(distance));
+  }
+
   let floatTemperature = parseFloat(temperature) / 10;
   let floatPressure = parseFloat(pressure) / 10;
 
@@ -317,7 +331,7 @@ parser.on("data", (data) => {
     sendToAPI(parsedData)
   }
 
-  // console.log("Data terkirim:", parsedData);
+  console.log("Data terkirim:", parsedData);
 
   port.write(`${siaga},${alarm},1,*`);
 });
